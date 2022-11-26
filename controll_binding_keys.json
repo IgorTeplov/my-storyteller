@@ -1,0 +1,68 @@
+{
+    "move_camera_top": [
+        768,
+        1073741906,
+        0
+    ],
+    "move_camera_bottom": [
+        768,
+        1073741905,
+        0
+    ],
+    "move_camera_left": [
+        768,
+        1073741904,
+        0
+    ],
+    "move_camera_right": [
+        768,
+        1073741903,
+        0
+    ],
+    "camera_up_scale": [
+        1027,
+        [
+            0,
+            1
+        ],
+        0
+    ],
+    "camera_down_scale": [
+        1027,
+        [
+            0,
+            -1
+        ],
+        0
+    ],
+    "move_user_top": [
+        768,
+        119,
+        0
+    ],
+    "move_user_bottom": [
+        768,
+        115,
+        0
+    ],
+    "move_user_left": [
+        768,
+        97,
+        0
+    ],
+    "move_user_right": [
+        768,
+        100,
+        0
+    ],
+    "user_tp": [
+        1025,
+        1,
+        0
+    ],
+    "game_pause": [
+        768,
+        32,
+        0
+    ]
+}
