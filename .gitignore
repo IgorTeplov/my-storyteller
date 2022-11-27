@@ -1,0 +1,12 @@
+/f
+/__pycache__
+
+/build
+/dist
+
+/**/*.zip
+/**/sprite_sheet.png
+
+user_id.json
+user_id_*.json
+grd.spec

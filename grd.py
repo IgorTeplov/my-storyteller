@@ -1,3 +1,4 @@
+import io
 import socket
 import pygame
 from pygame import Rect as R
@@ -13,7 +14,7 @@ from math import floor, ceil
 from datetime import datetime
 from sys import argv
 from time import time
-import io
+from copy import copy
 
 # глобальное значение для увеличения/уменьшения блоков
 GLOBAL_SCALE = 2
@@ -25,7 +26,7 @@ PACKEGE_MAX_DATA_LEN = 4
 NAME_SPACE_BYTES = 7
 
 # размер буфера для пакета в мультиплеере
-BUFFER_SIZE = 1024  # 16384
+BUFFER_SIZE = 2048  # 16384
 
 
 SYSTEM_COMANDS = {
@@ -83,55 +84,153 @@ def get_first_event():
             find_event = True
     return event_as_simple_object
 
-class ActionAnswer(object):
-    def __init__(self, action_name=None, action=None, mods=None, key=False, result=False):
+# Добавить систему валидации уникальных имен событий во всех настройках (ВАЖНО!!!, в коде нету никакой защиты от перезаписи)
+class PhysicalEvent(object):
+    def __init__(self, pygame_event, position=[None, None]):
+        if isinstance(pygame_event, dict):
+            self.player = pygame_event['player']
+            self.uuid = pygame_event['uuid']
+
+            self.event = pygame_event['event']
+            self.mods = pygame_event['mods']
+            self.action = pygame_event['action']
+            self.action_name = pygame_event['name']
+            if 'position' in pygame_event.keys():
+                uuid, player, x, y = pygame_event['position'].split(';')
+                self.position = (GameState.s_grids[f'{uuid}:{player}'], (int(x), int(y)))
+            else:
+                self.position = (None, None)
+            self.objs = pygame_event['objs']
+        else:
+            self.player = getnode()
+            self.uuid = GameState.U_ID.get('UUID')
+
+            self.event = pygame_event.type
+            self.mods = pygame.key.get_mods()
+            self.position = position
+
+            self.action = None
+            if self.event == pygame.KEYDOWN or self.event == pygame.KEYUP:
+                self.action = pygame_event.key
+            elif self.event == pygame.MOUSEBUTTONDOWN or self.event == pygame.MOUSEBUTTONUP:
+                self.action = pygame_event.button
+            elif self.event == pygame.MOUSEWHEEL:
+                self.action = [pygame_event.x, pygame_event.y]
+
+    def provide(self, action_name):
         self.action_name = action_name
-        self.action = action
-        self.mods = mods
-
-        self.key = key
-        self.result = result
-
-    def __or__(self, other):
-        return self.result or other.result
-
-    def __and__(self, other):
-        return self.result and other.result
-
-    def __bool__(self):
-        return self.result
+        self.objs = copy(GameState.get_selected_objs())
+        return self
 
     def pack(self):
-        grid, cell = Grid.define_cell_by_x_and_y(*pygame.mouse.get_pos())
-        position = None
-        if grid is not None:
-            position = f'{grid.uuid}:{grid.player};{cell[0]},{cell[1]}'
-        return create_pack('Event', dumps({'name':self.action_name, 'action':self.action, 'mods':self.mods, 'key':self.key, 'pos': position, 'result':self.result}))
+        data = {
+            'player':self.player, 'uuid':self.uuid,
+            'event':self.event, 'mods':self.mods, 'action': self.action,
+            'name':self.action_name,
+            'objs': GameState.get_selected_objs()
+        }
+        if self.position != (None, None):
+            data['position'] = f'{self.position[0].uuid};{self.position[0].player};{self.position[1][0]};{self.position[1][1]}'
+        return create_pack('Event', dumps(data))
 
-def determinate_action(event, actions_conf, action_name):
-    mods = pygame.key.get_mods()
+    @classmethod
+    def from_pack(self, pack):
+        return PhysicalEvent(loads(pack['data']))
+
+    def __bool__(self):
+        return True
+
+
+class PhysicalKeyEvent(object):
+    def __init__(self, keys, position=[None, None]):
+        if isinstance(keys, dict):
+            self.player = keys['player']
+            self.uuid = keys['uuid']
+
+            self.event = keys['event']
+            self.mods = keys['mods']
+            self.action = keys['action']
+            self.action_name = keys['name']
+            if 'position' in keys.keys():
+                uuid, player, x, y = keys['position'].split(';')
+                self.position = (GameState.s_grids[f'{uuid}:{player}'], (int(x), int(y)))
+            else:
+                self.position = (None, None)
+            self.objs = keys['objs']
+            class I(dict):
+                def __getitem__(self, key):
+                    try:
+                        return super().__getitem__(key)
+                    except:
+                        return False
+            self.keys = I({self.action: True})
+        else:
+            self.keys = keys
+            self.player = getnode()
+            self.uuid = GameState.U_ID.get('UUID')
+
+            self.event = pygame.KEYDOWN
+            self.mods = pygame.key.get_mods()
+            self.position = position
+
+            self.action = None
+
+    def provide(self, action_name, key):
+        self.action_name = action_name
+        self.action = key
+        self.objs = copy(GameState.get_selected_objs())
+        return self
+
+    def pack(self):
+        data = {
+            'player':self.player, 'uuid':self.uuid,
+            'event':self.event, 'mods':self.mods, 'action': self.action,
+            'name':self.action_name,
+            'objs': GameState.get_selected_objs()
+        }
+        if self.position != (None, None):
+            data['position'] = f'{self.position[0].uuid};{self.position[0].player};{self.position[1][0]};{self.position[1][1]}'
+        return create_pack('KEvent', dumps(data))
+
+    @classmethod
+    def from_pack(self, pack):
+        return PhysicalKeyEvent(loads(pack['data']))
+
+    def __bool__(self):
+        return True
+
+# ИГОРЬ! БЛЯТЬ! У ТЕБЯ БЕДА С БАШКОЙ! КАК ТЫ ДОПУСТИЛ ТАКОЙ ПРОСЧЕТ С АДРЕССНЫМ ПРОСТРАНСТВОМ ?
+# КАКОГО У ТЕБЯ UUID ПОЛЬЗОВАТЕЛЯ И БЛОКА ЭТО ОДНО И ТОЖЕ ?
+# ТЫ БЛЯТЬ ЧЕМ ДУМАЕШЬ, СУКА ?
+
+# native event -> MyEvent[event, key|button|axis, mods, player, uuid, objs<-GameState.local.selected_objects|None], detrminate<MyEvent->MyEvent|False, handler<MyEvent, send<MyEvent
+# native keys -> MyKeys -> [keys_true, mods, player, uuid, objs<-GameState.local.selected_objects|None]
+# select object, click on object from shift mode, add_to_list, click on any map, clear_list
+
+def determinate_action(event, actions_conf, action_name):  # player uuid игрока uuids объектов к ктором применяеться действия
     action = actions_conf.get(action_name, None)
-    if action is None or mods != action[2]:
-        return ActionAnswer(action_name=action_name, action=action, mods=mods, result=False)
+    event = event.provide(action_name)
 
-    if event.type == action[0]:
-        if event.type == pygame.KEYDOWN:
-            if event.key == action[1]:
-                return ActionAnswer(action_name=action_name, action=action, mods=mods, result=True)
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == action[1]:
-                return ActionAnswer(action_name=action_name, action=action, mods=mods, result=True)
-        if event.type == pygame.MOUSEWHEEL:
-            if event.x == action[1][0] and event.y == action[1][1]:
-                return ActionAnswer(action_name=action_name, action=action, mods=mods, result=True)
-    return ActionAnswer(action_name=action_name, action=action, mods=mods, result=False)
+    if action is None or event.mods != action[2]:
+        return False
 
-def determinate_key_pressed_action(keys, actions_conf, action_name):
-    mods = pygame.key.get_mods()
+    if event.event == action[0]:
+        if event.action == action[1]:
+            return event
+
+    return False
+
+def determinate_key_pressed_action(event, actions_conf, action_name):
     action = actions_conf.get(action_name, None)
-    if action is None or mods != action[2]:
-        return ActionAnswer(action_name=action_name, action=action, mods=mods, key=True, result=False)
-    return ActionAnswer(action_name=action_name, action=action, mods=mods, key=True, result=keys[action[1]])
+    event.provide(action_name, action[1])
+
+    if action is None or event.mods != action[2]:
+        return False
+
+    if event.keys[action[1]]:
+        return event
+
+    return False
 
 # multiplayer tools
 def create_pack(name, data):
@@ -224,6 +323,9 @@ class GameState(object):
     state_queue  = Queue(2048)
 
     user_actions = Queue(4096)
+    user_k_actions = Queue(4096)
+
+    selected_objects = []
 
     def __new__(cls):
         if not hasattr(cls, 'instance'):
@@ -248,16 +350,38 @@ class GameState(object):
         cls.simple_bloks.update(display)
 
     @classmethod
-    def add_user(cls, user):
+    def add_user(cls, user, player):
+        db = DBlock(list(cls.s_grids.values())[0], 0,0, physical_stats={'is_block':True}, node=player, uuid=user)
+        GameState.simple_bloks.add(db)
+
         cls.u_[user] = {
             's_grids':  [],
             's_blocks': [],
-            's_blocks_in_space': []
+            's_blocks_in_space': [],
+            'user': db
         }
+        cls.u_p[user] = player
+
+
+    # Значение локально, и отправляеться вместе с событием
+    # синхранизация не нужна, хранение тоже.
+    @classmethod
+    def get_selected_objs(cls):
+        return cls.selected_objects
 
     @classmethod
-    def set_palyer(cls, user, player):
-        cls.u_p[user] = player
+    def add_to_selected_objs(cls, obj):
+        if obj not in cls.selected_objects:
+            cls.selected_objects.append(obj)
+
+    @classmethod
+    def clear_selected_obj(cls, obj):
+        cls.selected_objects = []
+
+    @classmethod
+    def remove_from_selected_objs(cls, obj):
+        if obj in cls.selected_objects:
+            cls.selected_objects.remove(obj)
 
 
 # Управление курсором
@@ -425,13 +549,13 @@ class Event(object):
 
     # пара condition_handler и handler для обычных событий
     @classmethod
-    def condition_handler(cls, event) -> ActionAnswer: pass
+    def condition_handler(cls, event) -> PhysicalEvent or False: pass
     @classmethod
     def handler(cls, event): pass
 
     # пара condition_handler и handler для зажатых кнопок
     @classmethod
-    def k_condition_handler(cls, keys) -> ActionAnswer: pass
+    def k_condition_handler(cls, keys) -> PhysicalKeyEvent or False: pass
     @classmethod
     def k_handler(cls, keys): pass
 
@@ -449,12 +573,16 @@ class GlobalLoader(object):
     def update(self):
         self._update()
         self._k_update()
+        if MultiPlayer._instance is not None and MultiPlayer._instance._role == 'server':
+            self.server_user_update()
+            self.server_user_k_update()
 
     def _update(self):
         # получение событий и передача их в оброботчики
         for event in pygame.event.get():
             for loader in self.loaders:
-                answer = loader.update(event)
+                _event = PhysicalEvent(event, Grid.define_cell_by_x_and_y(*pygame.mouse.get_pos()))
+                answer = loader.update(_event)
                 if answer:
                     break
 
@@ -462,9 +590,26 @@ class GlobalLoader(object):
         # получение зажатых кнопок и передача их в оброботчики
         keys = pygame.key.get_pressed()
         for loader in self.loaders:
-            answer = loader.k_update(keys)
+            _keys = PhysicalKeyEvent(keys, Grid.define_cell_by_x_and_y(*pygame.mouse.get_pos()))
+            answer = loader.k_update(_keys)
             if answer:
                 break
+
+    def server_user_update(self):
+        while not GameState.user_actions.empty():
+            event = GameState.user_actions.get()
+            for loader in self.loaders:
+                answer = loader.update(event)
+                if answer:
+                    break
+
+    def server_user_k_update(self):
+        while not GameState.user_k_actions.empty():
+            keys = GameState.user_k_actions.get()
+            for loader in self.loaders:
+                answer = loader.k_update(keys)
+                if answer:
+                    break
 
 
 # описует загрузчик
@@ -494,23 +639,20 @@ class EventLoader(ABS_Loader):
             # для каждого события
             for e in self.events:
                 # проверить условие
-                ech = e.condition_handler(event)
-                if ech:
+                _event = e.condition_handler(event)
+                if _event != False:
+                    # MultiPlayer._instance is None single player | 'server'
                     if MultiPlayer._instance is None or MultiPlayer._instance._role == 'server':
                         # выполнить
-                        e.handler(event)
+                        e.handler(_event)
+                    # only on local machine
                     elif e.local:
                         # выполнить
-                        e.handler(event)
+                        e.handler(_event)
+                    # put to server from client
                     else:
                         # отправить на сервер
-                        if not isinstance(ech, ActionAnswer):
-                            print('Warning!', e.condition_handler, 'must return', ActionAnswer, 'object!')
-                            # Warning example
-                            # Warning! <bound method W_GameLoop.ui.<locals>.SimplePlayerControll.condition_handler of
-                            # <class '__main__.W_GameLoop.ui.<locals>.SimplePlayerControll'>> must return <class '__main__.ActionAnswer'> object!
-                        else:
-                            GameState.user_actions.put(ech.pack())
+                        GameState.user_actions.put(_event.pack())
                     return True
 
 
@@ -523,20 +665,17 @@ class KeyPressedEventLoader(ABS_Loader):
             # для каждого события
             for e in self.events:
                 # проверить условие
-                ech = e.k_condition_handler(keys)
-                if ech:
+                _event = e.k_condition_handler(keys)
+                if _event != False:
                     if MultiPlayer._instance is None or MultiPlayer._instance._role == 'server':
                         # выполнить
-                        e.k_handler(keys)
+                        e.k_handler(_event)
                     elif e.local:
                         # выполнить
-                        e.k_handler(keys)
+                        e.k_handler(_event)
                     else:
                         # отправить на сервер
-                        if not isinstance(ech, ActionAnswer):
-                            print('Warning!', e.condition_handler, 'must return', ActionAnswer, 'object!')
-                        else:
-                            GameState.user_actions.put(e.k_condition_handler(keys).pack())
+                        GameState.user_actions.put(_event.pack())
                     return True
 
 # PlayerView не зависят от сервера или клиента, для всех эти значения ЛОКАЛЬНЫ
@@ -1329,7 +1468,13 @@ class DBlock(Sprite):
             if not hasattr(self, 's') or not PlayerView.can_change_scale:
                 cell = self.grid._grid[(self.tl_x, self.tl_y)]
                 self.s = S((cell.width * self.physical_stats['x_length'], cell.height * self.physical_stats['y_length']))
-                self.s.fill(C(255,255,255))
+
+                print(self.uuid)
+                print(GameState.U_ID.get('UUID'))
+                if self.uuid == GameState.U_ID.get('UUID'):
+                    self.s.fill(C(0, 0, 255))
+                else:
+                    self.s.fill(C(255,0, 0))
 
         else:
             # если нет, но тужно создать по отдельному Surface для каждой клетки объекта
@@ -1340,7 +1485,11 @@ class DBlock(Sprite):
                 for line in self.block_relative_coords:
                     for block in line:
                         self.ss[block] = S((cell.width, cell.height))
-                        self.ss[block].fill(C(255,0,0))
+                        if self.uuid == GameState.U_ID.get('UUID'):
+                            self.ss[block].fill(C(0,0,255))
+                        else:
+                            self.ss[block].fill(C(255,0,0))
+                        
 
     # отрисовка Surface на экране
     def simple_update(self, display):
@@ -1444,8 +1593,7 @@ class MultiPlayer(object):
                 if determinate_meta(player_meta):
                     _, player = extract_meta(player_meta)
 
-                self.game_state.add_user(user)
-                self.game_state.set_palyer(user, player)
+                self.game_state.add_user(user, player)
                 self._connection_player[address] = (user, player)
 
                 self.UDPServerSocket.sendto(b'', address)
@@ -1475,8 +1623,14 @@ class MultiPlayer(object):
             if u_meta['UUID'] in cls.game_state.u_.keys():
                 if pack['type'].startswith('Grid'):
                     cls.game_state.u_[u_meta['UUID']]['s_grids'].append(pack['data'])
-                elif pack['type'].startswith('DBlock'):
+                if pack['type'].startswith('DBlock'):
                     cls.game_state.u_[u_meta['UUID']]['s_blocks'].append(pack['data'])
+                if pack['type'].startswith('Event'):
+                    event = PhysicalEvent.from_pack(pack)
+                    GameState.user_actions.put(event)
+                if pack['type'].startswith('KEvent'):
+                    keys = PhysicalKeyEvent.from_pack(pack)
+                    GameState.user_k_actions.put(keys)
 
     # создание изменеий сервера для игроков
     @classmethod
@@ -1549,20 +1703,21 @@ class MultiPlayer(object):
         u_meta = {}
         packs = []
 
-        uuid_meta, player_meta, changes = changes.decode('utf-8', errors='ignore').split('\n')
+        uuid_meta, player_meta, changes = changes.split(b'\n')
 
+        uuid_meta = uuid_meta.decode('utf-8', errors='ignore')
         if determinate_meta(uuid_meta):
             key, value = extract_meta(uuid_meta)
             u_meta[key] = value
 
+        player_meta = player_meta.decode('utf-8', errors='ignore')
         if determinate_meta(player_meta):
             key, value = extract_meta(player_meta)
             u_meta[key] = value
 
-        changes = changes.encode()
         if changes != b'':
             packs = cls._read_packs(changes)
-        return u_meta, packs
+        return (u_meta, packs)
 
     # static grids and blocks
     # Гриды сапми по себе статичны, то есть можно только создать и уничтожить грид
@@ -1700,7 +1855,7 @@ UA = UserActions()
 class XQuitEvent(Event):
     @classmethod
     def condition_handler(cls, event):
-        return event.type == pygame.QUIT
+        return event.event == pygame.QUIT
 
     @classmethod
     def handler(cls, event):
@@ -1722,7 +1877,7 @@ class W_Main_Menu(Window):
         class QuitEvent(Event):
             @classmethod
             def condition_handler(cls, event):
-                return determinate_action(event, SYSTEM_COMANDS, 'lmb') and self.on_button('Exit', *pygame.mouse.get_pos())
+                return self.on_button('Exit', *pygame.mouse.get_pos()) and determinate_action(event, SYSTEM_COMANDS, 'lmb') 
 
             @classmethod
             def handler(cls, event):
@@ -1731,7 +1886,7 @@ class W_Main_Menu(Window):
         class SettingsEvent(Event):
             @classmethod
             def condition_handler(cls, event):
-                return determinate_action(event, SYSTEM_COMANDS, 'lmb') and self.on_button('Settings', *pygame.mouse.get_pos())
+                return self.on_button('Settings', *pygame.mouse.get_pos()) and determinate_action(event, SYSTEM_COMANDS, 'lmb')
 
             @classmethod
             def handler(cls, event):
@@ -1741,7 +1896,7 @@ class W_Main_Menu(Window):
         class StartGameEvent(Event):
             @classmethod
             def condition_handler(cls, event):
-                return determinate_action(event, SYSTEM_COMANDS, 'lmb') and self.on_button('NewGame', *pygame.mouse.get_pos())
+                return self.on_button('NewGame', *pygame.mouse.get_pos()) and determinate_action(event, SYSTEM_COMANDS, 'lmb')
 
             @classmethod
             def handler(cls, event):
@@ -1755,7 +1910,7 @@ class W_Main_Menu(Window):
         class CreateServer(Event):
             @classmethod
             def condition_handler(cls, event):
-                return determinate_action(event, SYSTEM_COMANDS, 'lmb') and self.on_button('CreateServer', *pygame.mouse.get_pos())
+                return self.on_button('CreateServer', *pygame.mouse.get_pos()) and determinate_action(event, SYSTEM_COMANDS, 'lmb')
 
             @classmethod
             def handler(cls, event):
@@ -1770,7 +1925,7 @@ class W_Main_Menu(Window):
         class ConnectToServer(Event):
             @classmethod
             def condition_handler(cls, event):
-                return determinate_action(event, SYSTEM_COMANDS, 'lmb') and self.on_button('ConnectToServer', *pygame.mouse.get_pos())
+                return self.on_button('ConnectToServer', *pygame.mouse.get_pos()) and determinate_action(event, SYSTEM_COMANDS, 'lmb')
 
             @classmethod
             def handler(cls, event):
@@ -1811,7 +1966,7 @@ class W_Settings_Menu(ScrollableWindow):
         class SettingsEvent(Event):
             @classmethod
             def condition_handler(cls, event):
-                return determinate_action(event, SYSTEM_COMANDS, 'lmb') and any([self.on_button(name, *pygame.mouse.get_pos()) for name in self._ui['default'].keys()])
+                return any([self.on_button(name, *pygame.mouse.get_pos()) for name in self._ui['default'].keys()]) and determinate_action(event, SYSTEM_COMANDS, 'lmb')
 
             @classmethod
             def handler(cls, event):
@@ -1880,11 +2035,11 @@ class W_GameLoop(Window):
 
             @classmethod
             def handler(cls, event):
-                if determinate_action(event, UA.config, 'camera_up_scale'):
+                if event.action_name == 'camera_up_scale':
                     if PlayerView.user_view_scale + 1 <= PlayerView.user_max_scale:
                         PlayerView.user_view_scale += 1
                         PlayerView.can_change_scale = False
-                if determinate_action(event, UA.config, 'camera_down_scale'):
+                if event.action_name == 'camera_down_scale':
                     if PlayerView.user_view_scale - 1 >= PlayerView.user_min_scale:
                         PlayerView.user_view_scale -= 1
                         PlayerView.can_change_scale = False
@@ -1963,24 +2118,24 @@ class W_GameLoop(Window):
 
             @classmethod
             def handler(cls, event):
-                if determinate_action(event, UA.config, 'move_user_right'):
+                if event.action_name == 'move_user_right':
                     if GameState._player.can_i_move(tl_x = GameState._player.tl_x+1):
                         GameState._player.move(tl_x = GameState._player.tl_x+1)
 
-                if determinate_action(event, UA.config, 'move_user_left'):
+                if event.action_name == 'move_user_left':
                     if GameState._player.can_i_move(tl_x = GameState._player.tl_x-1):
                         GameState._player.move(tl_x = GameState._player.tl_x-1)
 
-                if determinate_action(event, UA.config, 'move_user_top'):
+                if event.action_name == 'move_user_top':
                     if GameState._player.can_i_move(tl_y = GameState._player.tl_y-1):
                         GameState._player.move(tl_y = GameState._player.tl_y-1)
 
-                if determinate_action(event, UA.config, 'move_user_bottom'):
+                if event.action_name == 'move_user_bottom':
                     if GameState._player.can_i_move(tl_y = GameState._player.tl_y+1):
                         GameState._player.move(tl_y = GameState._player.tl_y+1)
 
-                if determinate_action(event, UA.config, 'user_tp'):
-                    cgrid, cell = Grid.define_cell_by_x_and_y(*pygame.mouse.get_pos())
+                if event.action_name == 'user_tp':
+                    cgrid, cell = event.position
                     if cell is not None and GameState._player.can_i_move_to_grid(cgrid, *cell):
                         GameState._player.move_to_grid(cgrid, *cell)
 
